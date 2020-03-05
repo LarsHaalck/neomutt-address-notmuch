@@ -1,6 +1,7 @@
 use ini::Ini;
 use std::path::PathBuf;
 use structopt::StructOpt;
+use notmuch::Error;
 
 /// A basic example
 #[derive(StructOpt, Debug)]
@@ -15,23 +16,36 @@ struct Opt {
     name: String,
 }
 
-// query:
-// collect all messages, where to: search and from is me
-// count
-// if too small, collet all from: search and to egal
-// go through all headers, split on commas, match occurences and sort them descending
-fn generate_query_string(all_mails: Vec<&str>, name: &str) {
-    let mut query_strings : Vec<String> = Vec::new();
+fn generate_query_string(
+    db: notmuch::Database,
+    all_mails: Vec<&str>,
+    name: &str,
+) -> Result<Vec<String>, Error> {
+    let mut query_strings: Vec<String> = Vec::new();
+
     let from_all_mails: Vec<_> = all_mails
         .iter()
         .map(|mail| format!("from: {}", mail))
         .collect();
     let mut query_string = from_all_mails.join(" or ");
     query_string = format!("({}) and to: {}", query_string, name);
+    // println!("{:?}", query_strings);
+
+    let query = db.create_query(&query_string)?;
+    let count = query.count_messages()?;
+
+    query_strings.push(query_string);
+    if count > 10 {
+        return Ok(query_strings);
+    }
+
+    let query_string = format!("from: {}", name);
     query_strings.push(query_string);
     println!("{:?}", query_strings);
+    Ok(query_strings)
 }
 
+// go through all headers, split on commas, match occurences and sort them descending
 
 fn main() {
     let opt = Opt::from_args();
@@ -77,13 +91,17 @@ fn main() {
         None => Vec::new(),
     };
 
-    all_mails.push(&primary_email);
-    let queries = generate_query_string(all_mails, &opt.name);
+    let path = match config.get_from(Some("database"), "path") {
+        Some(path) => path,
+        None => {
+            println!("Couldn't find field path in config file.");
+            return;
+        }
+    };
 
-    // let db = notmuch::Database::open(&mail_path, notmuch::DatabaseMode::ReadOnly).unwrap();
-    // let query = db.create_query(&query_string).unwrap();
-    // let count = query.count_messages();
-    // println!("{:?}", count);
+    all_mails.push(&primary_email);
+    let db = notmuch::Database::open(&path, notmuch::DatabaseMode::ReadOnly).unwrap();
+    let _queries = generate_query_string(db, all_mails, &opt.name);
 
     // let threads = query.search_messages().unwrap();
     // for thread in threads {
