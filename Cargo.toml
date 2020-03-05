@@ -4,8 +4,7 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
-xdg = "2.1.0"
 dirs = "2.0.2"
-notmuch = "0.6.0"
-toml = "0.5.6"
 structopt = "0.3.11"
+rust-ini = "0.15.2"
+notmuch = "0.6.0"
