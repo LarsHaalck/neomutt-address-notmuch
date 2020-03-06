@@ -1,7 +1,7 @@
 use ini::Ini;
+use notmuch::Error;
 use std::path::PathBuf;
 use structopt::StructOpt;
-use notmuch::Error;
 
 /// A basic example
 #[derive(StructOpt, Debug)]
@@ -29,19 +29,17 @@ fn generate_query_string(
         .collect();
     let mut query_string = from_all_mails.join(" or ");
     query_string = format!("({}) and to: {}", query_string, name);
-    // println!("{:?}", query_strings);
 
     let query = db.create_query(&query_string)?;
     let count = query.count_messages()?;
 
     query_strings.push(query_string);
-    if count > 10 {
+    if count < 10 {
         return Ok(query_strings);
     }
 
     let query_string = format!("from: {}", name);
     query_strings.push(query_string);
-    println!("{:?}", query_strings);
     Ok(query_strings)
 }
 
@@ -102,9 +100,4 @@ fn main() {
     all_mails.push(&primary_email);
     let db = notmuch::Database::open(&path, notmuch::DatabaseMode::ReadOnly).unwrap();
     let _queries = generate_query_string(db, all_mails, &opt.name);
-
-    // let threads = query.search_messages().unwrap();
-    // for thread in threads {
-    //     println!("thread {:?} ", thread.header("to"));
-    // }
 }
