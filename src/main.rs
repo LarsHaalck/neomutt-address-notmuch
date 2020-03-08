@@ -21,6 +21,9 @@ struct MailEntry {
     display_name: String, // can be empty
 }
 
+// TODO: fix awkward display names, e.g. b >> term1 term2, how does this happen?
+// TODO: if german öäü, replace also with oe,ae,ue?
+
 fn generate_query_string(
     db: &notmuch::Database,
     all_mails: Vec<&str>,
