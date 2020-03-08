@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use structopt::StructOpt;
 
-// A basic example
 #[derive(StructOpt, Debug)]
 #[structopt()]
 struct Opt {
@@ -58,57 +57,43 @@ fn contains_any(query: &str, tests: &Vec<&str>) -> bool {
     res
 }
 
-fn retrieve_mail_entries (
-    mails: Vec<String>,
+fn retrieve_mail_entries(
+    mails: String,
     name: &str,
 ) -> Result<HashMap<String, MailEntry>, regex::Error> {
+    let mut map: HashMap<String, MailEntry> = HashMap::new();
     let email_regex = regex::Regex::new(
         r"([a-zA-Z0-9_+]([a-zA-Z0-9_+.]*[a-zA-Z0-9_+])?)@([a-zA-Z0-9]+([\-\.]{1}[a-zA-Z0-9]+)*\.[a-zA-Z]{2,6})",
     )?;
-    let display_regex = regex::Regex::new(r"(^[a-z0-9A-Z ,öäüÖÄÜß\-_\.]*)<")?;
-    let mut map: HashMap<String, MailEntry> = HashMap::new();
-    // println!("{:?}", mails);
-    for mail in mails {
-        // println!("{:?}", mail);
-        let capture = match email_regex.captures(&mail) {
-            Some(capture) => capture,
+    let matches: Vec<_> = email_regex.captures_iter(&mails).collect();
+    let mut last_end = 0;
+    for i in 0..matches.len() {
+        let email_capture = match matches[i].get(0) {
+            Some(match_group) => match_group,
             None => continue,
         };
-        let email_stripped = match capture.get(0) {
-            Some(match_group) => match_group.as_str().to_lowercase(),
-            None => continue,
-        };
+        let display_name_stripped = mails[last_end..email_capture.start()]
+            .trim_matches(|c| char::is_ascii_punctuation(&c) || char::is_whitespace(c));
+        last_end = email_capture.end();
 
-        let mut display_stripped = "";
-        if display_regex.is_match(&mail) {
-            let capture = match display_regex.captures(&mail) {
-                Some(capture) => capture,
-                None => continue,
-            };
-            display_stripped = match capture.get(1) {
-                Some(match_group) => match_group.as_str().trim(),
-                None => "",
-            };
-        }
+        let email_stripped = email_capture.as_str().to_lowercase();
 
         let tests: Vec<&str> = name.split(" ").collect();
-        // println!("{:?}", email_stripped);
-        // println!("{:?}\n", display_stripped);
         if (contains_any(&email_stripped, &tests)
-            || contains_any(&display_stripped.to_lowercase(), &tests))
+            || contains_any(&display_name_stripped.to_lowercase(), &tests))
             && !email_stripped.contains("noreply")
         {
             match map.get_mut(&email_stripped) {
                 Some(entry) => {
-                    if display_stripped.len() > entry.display_name.len() {
-                        entry.display_name = display_stripped.to_string();
+                    if display_name_stripped.len() > entry.display_name.len() {
+                        entry.display_name = display_name_stripped.to_string();
                     }
                     entry.count += 1;
                 }
                 None => {
                     let entry = MailEntry {
                         count: 1,
-                        display_name: display_stripped.to_string(),
+                        display_name: display_name_stripped.to_string(),
                     };
                     map.insert(email_stripped, entry);
                 }
@@ -118,8 +103,8 @@ fn retrieve_mail_entries (
     Ok(map)
 }
 
-fn sort_by_count(map : HashMap<String, MailEntry>) {
-    let mut entry_list : Vec<(&String, &MailEntry)> = map.iter().collect();
+fn sort_by_count(map: HashMap<String, MailEntry>) {
+    let mut entry_list: Vec<(&String, &MailEntry)> = map.iter().collect();
     entry_list.sort_by(|a, b| (b.1.count).cmp(&a.1.count));
 
     for entry in entry_list {
@@ -134,7 +119,7 @@ fn sort_by_count(map : HashMap<String, MailEntry>) {
 fn run_queries(
     db: &notmuch::Database,
     query_strings: Vec<String>,
-) -> Result<Vec<String>, notmuch::Error> {
+) -> Result<String, notmuch::Error> {
     let header_fields = vec![vec!["to", "cc", "bcc"], vec!["from"]];
     let mut collected_mails: Vec<String> = Vec::new();
     for (i, query_string) in query_strings.iter().enumerate() {
@@ -149,21 +134,13 @@ fn run_queries(
                     None => continue,
                 };
 
-                println!("{:?}", mails);
-                mails = mails.replace(&['\"', '\\', '\t'][..], "");
-                let mails: Vec<String> = mails
-                    .split(",")
-                    .filter(|mail| !mail.is_empty())
-                    .map(|mail| mail.to_string())
-                    .collect();
-                collected_mails.extend(mails);
+                mails = mails.replace(&['\"', '\\', '\t', '\''][..], "");
+                collected_mails.push(mails);
             }
         }
     }
-    Ok(collected_mails)
+    Ok(collected_mails.join(","))
 }
-
-// go through all headers, split on commas, match occurences and sort them descending
 
 fn main() {
     let opt = Opt::from_args();
@@ -233,15 +210,12 @@ fn main() {
             return;
         }
     };
-    let set = match retrieve_mail_entries(query_results, &opt.name) {
-        Ok(set) => set,
+    let map = match retrieve_mail_entries(query_results, &opt.name) {
+        Ok(map) => map,
         Err(e) => {
             println!("Error retrieving mails from queries: {}", e);
             return;
         }
     };
-    let _blubb = sort_by_count(set);
-
-
-
+    let _list = sort_by_count(map);
 }
