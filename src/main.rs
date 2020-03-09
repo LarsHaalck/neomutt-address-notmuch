@@ -3,8 +3,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use structopt::StructOpt;
 
-// TODO: env variable for notmuch config
-
 #[derive(StructOpt)]
 #[structopt()]
 struct Opt {
@@ -45,6 +43,32 @@ fn generate_query_string(
     }
 
     Ok(query_strings)
+}
+
+fn run_queries(
+    db: &notmuch::Database,
+    query_strings: Vec<String>,
+) -> Result<String, notmuch::Error> {
+    let header_fields = vec![vec!["to", "cc", "bcc"], vec!["from"]];
+    let mut collected_mails: Vec<String> = Vec::new();
+    for (i, query_string) in query_strings.iter().enumerate() {
+        let query = db.create_query(&query_string)?;
+        let messages = query.search_messages()?;
+
+        for message in messages {
+            for header_field in &header_fields[i] {
+                let header = message.header(header_field)?;
+                let mut mails: String = match header {
+                    Some(header) => header.to_string(),
+                    None => continue,
+                };
+
+                mails = mails.replace(&['\"', '\\', '\t', '\''][..], "");
+                collected_mails.push(mails);
+            }
+        }
+    }
+    Ok(collected_mails.join(","))
 }
 
 fn contains_any(query: &str, tests: &Vec<&str>) -> bool {
@@ -144,59 +168,49 @@ fn sort_by_count(map: HashMap<String, MailEntry>) {
     }
 }
 
-fn run_queries(
-    db: &notmuch::Database,
-    query_strings: Vec<String>,
-) -> Result<String, notmuch::Error> {
-    let header_fields = vec![vec!["to", "cc", "bcc"], vec!["from"]];
-    let mut collected_mails: Vec<String> = Vec::new();
-    for (i, query_string) in query_strings.iter().enumerate() {
-        let query = db.create_query(&query_string)?;
-        let messages = query.search_messages()?;
 
-        for message in messages {
-            for header_field in &header_fields[i] {
-                let header = message.header(header_field)?;
-                let mut mails: String = match header {
-                    Some(header) => header.to_string(),
-                    None => continue,
-                };
-
-                mails = mails.replace(&['\"', '\\', '\t', '\''][..], "");
-                collected_mails.push(mails);
+fn get_config_path(argument : Option<PathBuf>) -> Option<PathBuf> {
+    // try argument, then env, then default
+     match argument {
+        Some(dir) => Some(dir),
+        None => {
+            match std::env::var_os("NOTMUCH_CONFIG") {
+                Some(val) => Some(PathBuf::from(val)),
+                None => {
+                    match dirs::home_dir() {
+                        Some(mut dir) => {
+                            dir.push(".notmuch-config");
+                            Some(dir)
+                        }
+                        None => None
+                    }
+                }
             }
         }
     }
-    Ok(collected_mails.join(","))
 }
 
 fn main() {
     let opt = Opt::from_args();
 
-    let config = match opt.config {
+    // read config from default path, argument or env variable
+    let config = match get_config_path(opt.config) {
         Some(dir) => dir,
         None => {
-            println!("Using default location ~/.notmuch-config");
-            let mut default_path = match dirs::home_dir() {
-                Some(dir) => dir,
-                None => {
-                    println!("Could not find configuration file neomutt_address.toml");
-                    return;
-                }
-            };
-            default_path.push(".notmuch-config");
-            default_path
+            println!("Could not find configuration file .notmuch-config");
+            return;
         }
     };
 
     let config = match Ini::load_from_file(config) {
         Ok(ini) => ini,
         Err(e) => {
-            println!("Error config file: {}", e);
+            println!("Error loading config file: {}", e);
             return;
         }
     };
 
+    // fetch primary and all other mails
     let primary_email = match config.get_from(Some("user"), "primary_email") {
         Some(primary_email) => primary_email,
         None => {
@@ -213,6 +227,7 @@ fn main() {
         None => Vec::new(),
     };
 
+    // get database path
     let path = match config.get_from(Some("database"), "path") {
         Some(path) => path,
         None => {
