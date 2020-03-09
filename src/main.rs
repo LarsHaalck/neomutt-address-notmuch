@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use structopt::StructOpt;
 
-#[derive(StructOpt, Debug)]
+// TODO: env variable for notmuch config
+
+#[derive(StructOpt)]
 #[structopt()]
 struct Opt {
     // config file
@@ -15,14 +17,10 @@ struct Opt {
     name: String,
 }
 
-#[derive(Debug)]
 struct MailEntry {
-    count: i32,
-    display_name: String, // can be empty
+    count: i32,                          // how often was the mail used
+    display_names: HashMap<String, i32>, // how often the display name
 }
-
-// TODO: fix awkward display names, e.g. b >> term1 term2, how does this happen?
-// TODO: if german öäü, replace also with oe,ae,ue?
 
 fn generate_query_string(
     db: &notmuch::Database,
@@ -64,9 +62,10 @@ fn retrieve_mail_entries(
     mails: String,
     name: &str,
 ) -> Result<HashMap<String, MailEntry>, regex::Error> {
-    let mut map: HashMap<String, MailEntry> = HashMap::new();
+    let mut mail_map: HashMap<String, MailEntry> = HashMap::new();
+
     let email_regex = regex::Regex::new(
-        r"([a-zA-Z0-9_+]([a-zA-Z0-9_+.]*[a-zA-Z0-9_+])?)@([a-zA-Z0-9]+([\-\.]{1}[a-zA-Z0-9]+)*\.[a-zA-Z]{2,6})",
+        r"([a-zA-Z0-9_+]([a-zA-Z0-9_+\-.]*[a-zA-Z0-9_+])?)@([a-zA-Z0-9]+([\-\.]{1}[a-zA-Z0-9]+)*\.[a-zA-Z]{2,6})",
     )?;
     let matches: Vec<_> = email_regex.captures_iter(&mails).collect();
     let mut last_end = 0;
@@ -75,8 +74,9 @@ fn retrieve_mail_entries(
             Some(match_group) => match_group,
             None => continue,
         };
+
         let display_name_stripped = mails[last_end..email_capture.start()]
-            .trim_matches(|c| char::is_ascii_punctuation(&c) || char::is_whitespace(c));
+            .trim_matches(|c| "<>,".contains(c) || char::is_whitespace(c));
         last_end = email_capture.end();
 
         let email_stripped = email_capture.as_str().to_lowercase();
@@ -84,37 +84,62 @@ fn retrieve_mail_entries(
         let tests: Vec<&str> = name.split(" ").collect();
         if (contains_any(&email_stripped, &tests)
             || contains_any(&display_name_stripped.to_lowercase(), &tests))
-            && !email_stripped.contains("noreply")
+            && !email_stripped.contains("reply")
         {
-            match map.get_mut(&email_stripped) {
-                Some(entry) => {
-                    if display_name_stripped.len() > entry.display_name.len() {
-                        entry.display_name = display_name_stripped.to_string();
+            // check if mail exits in map
+            match mail_map.get_mut(&email_stripped) {
+                Some(mail_entry) => {
+                    if !display_name_stripped.is_empty() {
+                        match mail_entry.display_names.get_mut(display_name_stripped) {
+                            Some(display_entry) => *display_entry += 1,
+                            None => {
+                                mail_entry
+                                    .display_names
+                                    .insert(display_name_stripped.to_string(), 1);
+                            }
+                        }
                     }
-                    entry.count += 1;
+                    mail_entry.count += 1;
                 }
                 None => {
-                    let entry = MailEntry {
+                    let mut mail_entry = MailEntry {
                         count: 1,
-                        display_name: display_name_stripped.to_string(),
+                        display_names: HashMap::new(),
                     };
-                    map.insert(email_stripped, entry);
+                    if !display_name_stripped.is_empty() {
+                        mail_entry
+                            .display_names
+                            .insert(display_name_stripped.to_string(), 1);
+                    }
+                    mail_map.insert(email_stripped, mail_entry);
                 }
             }
         }
     }
-    Ok(map)
+    Ok(mail_map)
 }
 
 fn sort_by_count(map: HashMap<String, MailEntry>) {
     let mut entry_list: Vec<(&String, &MailEntry)> = map.iter().collect();
     entry_list.sort_by(|a, b| (b.1.count).cmp(&a.1.count));
 
+    println!(
+        "Searching database ... {} matching entries",
+        entry_list.len()
+    );
     for entry in entry_list {
-        if entry.1.display_name.is_empty() {
+        if entry.1.display_names.is_empty() {
             println!("{}", entry.0);
         } else {
-            println!("{} <{}>", entry.1.display_name, entry.0);
+            let mut max_count: i32 = 0;
+            let mut max_display_name: &str = "";
+            for (display_name, count) in &entry.1.display_names {
+                if *count > max_count {
+                    max_count = *count;
+                    max_display_name = display_name;
+                }
+            }
+            println!("{}\t{}", entry.0, max_display_name);
         }
     }
 }
@@ -148,7 +173,6 @@ fn run_queries(
 fn main() {
     let opt = Opt::from_args();
 
-    // Load the user's config
     let config = match opt.config {
         Some(dir) => dir,
         None => {
@@ -220,5 +244,5 @@ fn main() {
             return;
         }
     };
-    let _list = sort_by_count(map);
+    sort_by_count(map);
 }
