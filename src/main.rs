@@ -48,9 +48,9 @@ fn generate_query_string(
 fn run_queries(
     db: &notmuch::Database,
     query_strings: Vec<String>,
-) -> Result<String, notmuch::Error> {
+) -> Result<Vec<(String, String)>, notmuch::Error> {
+    let mut mail_vec: Vec<(String, String)> = Vec::new();
     let header_fields = vec![vec!["to", "cc", "bcc"], vec!["from"]];
-    let mut collected_mails: Vec<String> = Vec::new();
     for (i, query_string) in query_strings.iter().enumerate() {
         let query = db.create_query(&query_string)?;
         let messages = query.search_messages()?;
@@ -58,17 +58,36 @@ fn run_queries(
         for message in messages {
             for header_field in &header_fields[i] {
                 let header = message.header(header_field)?;
-                let mut mails: String = match header {
-                    Some(header) => header.to_string(),
+                let header = match header {
+                    Some(header) => header,
                     None => continue,
                 };
 
-                mails = mails.replace(&['\"', '\\', '\t', '\''][..], "");
-                collected_mails.push(mails);
+                let addr_list = match mailparse::addrparse(&header) {
+                    Ok(addr_list) => addr_list,
+                    Err(_) => continue,
+                };
+                for addr in addr_list.iter() {
+                    match addr {
+                        mailparse::MailAddr::Single(info) => {
+                            let mut display_name = info
+                                .display_name
+                                .as_ref()
+                                .map(|s| s.as_str())
+                                .unwrap_or("")
+                                .replace(&['\"', '\\', '\t', '\''][..], "");
+                            if display_name.contains('@') {
+                                display_name.clear();
+                            }
+                            mail_vec.push((info.addr.clone(), display_name));
+                        }
+                        _ => continue,
+                    }
+                }
             }
         }
     }
-    Ok(collected_mails.join(","))
+    Ok(mail_vec)
 }
 
 fn contains_any(query: &str, tests: &Vec<&str>) -> bool {
@@ -82,44 +101,22 @@ fn contains_any(query: &str, tests: &Vec<&str>) -> bool {
     res
 }
 
-fn retrieve_mail_entries(
-    mails: String,
-    name: &str,
-) -> Result<HashMap<String, MailEntry>, regex::Error> {
+fn retrieve_mail_entries(mails: Vec<(String, String)>, name: &str) -> HashMap<String, MailEntry> {
     let mut mail_map: HashMap<String, MailEntry> = HashMap::new();
 
-    let email_regex = regex::Regex::new(
-        r"([a-zA-Z0-9_+]([a-zA-Z0-9_+\-.]*[a-zA-Z0-9_+])?)@([a-zA-Z0-9]+([\-\.]{1}[a-zA-Z0-9]+)*\.[a-zA-Z]{2,6})",
-    )?;
-    let matches: Vec<_> = email_regex.captures_iter(&mails).collect();
-    let mut last_end = 0;
-    for i in 0..matches.len() {
-        let email_capture = match matches[i].get(0) {
-            Some(match_group) => match_group,
-            None => continue,
-        };
-
-        let display_name_stripped = mails[last_end..email_capture.start()]
-            .trim_matches(|c| "<>,".contains(c) || char::is_whitespace(c));
-        last_end = email_capture.end();
-
-        let email_stripped = email_capture.as_str().to_lowercase();
-
+    for (mail, display_name) in mails {
         let tests: Vec<&str> = name.split(" ").collect();
-        if (contains_any(&email_stripped, &tests)
-            || contains_any(&display_name_stripped.to_lowercase(), &tests))
-            && !email_stripped.contains("reply")
+        if (contains_any(&mail, &tests) || contains_any(&display_name.to_lowercase(), &tests))
+            && !mail.contains("reply")
         {
             // check if mail exits in map
-            match mail_map.get_mut(&email_stripped) {
+            match mail_map.get_mut(&mail) {
                 Some(mail_entry) => {
-                    if !display_name_stripped.is_empty() {
-                        match mail_entry.display_names.get_mut(display_name_stripped) {
+                    if !display_name.is_empty() {
+                        match mail_entry.display_names.get_mut(&display_name) {
                             Some(display_entry) => *display_entry += 1,
                             None => {
-                                mail_entry
-                                    .display_names
-                                    .insert(display_name_stripped.to_string(), 1);
+                                mail_entry.display_names.insert(display_name.to_string(), 1);
                             }
                         }
                     }
@@ -130,17 +127,15 @@ fn retrieve_mail_entries(
                         count: 1,
                         display_names: HashMap::new(),
                     };
-                    if !display_name_stripped.is_empty() {
-                        mail_entry
-                            .display_names
-                            .insert(display_name_stripped.to_string(), 1);
+                    if !display_name.is_empty() {
+                        mail_entry.display_names.insert(display_name.to_string(), 1);
                     }
-                    mail_map.insert(email_stripped, mail_entry);
+                    mail_map.insert(mail, mail_entry);
                 }
             }
         }
     }
-    Ok(mail_map)
+    mail_map
 }
 
 fn sort_by_count(map: HashMap<String, MailEntry>) {
@@ -168,25 +163,20 @@ fn sort_by_count(map: HashMap<String, MailEntry>) {
     }
 }
 
-
-fn get_config_path(argument : Option<PathBuf>) -> Option<PathBuf> {
+fn get_config_path(argument: Option<PathBuf>) -> Option<PathBuf> {
     // try argument, then env, then default
-     match argument {
+    match argument {
         Some(dir) => Some(dir),
-        None => {
-            match std::env::var_os("NOTMUCH_CONFIG") {
-                Some(val) => Some(PathBuf::from(val)),
-                None => {
-                    match dirs::home_dir() {
-                        Some(mut dir) => {
-                            dir.push(".notmuch-config");
-                            Some(dir)
-                        }
-                        None => None
-                    }
+        None => match std::env::var_os("NOTMUCH_CONFIG") {
+            Some(val) => Some(PathBuf::from(val)),
+            None => match dirs::home_dir() {
+                Some(mut dir) => {
+                    dir.push(".notmuch-config");
+                    Some(dir)
                 }
-            }
-        }
+                None => None,
+            },
+        },
     }
 }
 
@@ -252,12 +242,6 @@ fn main() {
             return;
         }
     };
-    let map = match retrieve_mail_entries(query_results, &opt.name) {
-        Ok(map) => map,
-        Err(e) => {
-            println!("Error retrieving mails from queries: {}", e);
-            return;
-        }
-    };
+    let map = retrieve_mail_entries(query_results, &opt.name);
     sort_by_count(map);
 }
