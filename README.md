@@ -11,8 +11,8 @@ FLAGS:
     -V, --version    Prints version information
 
 OPTIONS:
-    -c, --config <config>
+    -c, --config <config>    path to notmuch config file
 
 ARGS:
-    <QUERY>
+    <QUERY>    search string
 ```

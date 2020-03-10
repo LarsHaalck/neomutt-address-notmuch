@@ -6,11 +6,11 @@ use structopt::StructOpt;
 #[derive(StructOpt)]
 #[structopt()]
 struct Opt {
-    // config file
+    /// path to notmuch config file
     #[structopt(short, long, parse(from_os_str))]
     config: Option<PathBuf>,
 
-    // search string
+    /// search string
     #[structopt(name = "QUERY")]
     name: String,
 }
