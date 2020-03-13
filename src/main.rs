@@ -195,7 +195,7 @@ fn main() {
     let config = match Ini::load_from_file(config) {
         Ok(ini) => ini,
         Err(e) => {
-            println!("Error loading config file: {}", e);
+            println!("Error loading notmuch-config file: {}", e);
             return;
         }
     };
