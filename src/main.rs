@@ -2,6 +2,7 @@ use ini::Ini;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use structopt::StructOpt;
+extern crate notmuch;
 
 #[derive(StructOpt)]
 #[structopt()]
@@ -184,7 +185,7 @@ fn main() {
     let opt = Opt::from_args();
 
     // read config from default path, argument or env variable
-    let config = match get_config_path(opt.config) {
+    let config_path = match get_config_path(opt.config) {
         Some(dir) => dir,
         None => {
             println!("Could not find configuration file .notmuch-config");
@@ -192,7 +193,7 @@ fn main() {
         }
     };
 
-    let config = match Ini::load_from_file(config) {
+    let config = match Ini::load_from_file(&config_path) {
         Ok(ini) => ini,
         Err(e) => {
             println!("Error loading notmuch-config file: {}", e);
@@ -227,7 +228,13 @@ fn main() {
     };
     all_mails.push(&primary_email);
 
-    let db = notmuch::Database::open(&path, notmuch::DatabaseMode::ReadOnly).unwrap();
+    let db = notmuch::Database::open_with_config(
+        Some(&path),
+        notmuch::DatabaseMode::ReadOnly,
+        Some(config_path),
+        None,
+    )
+    .unwrap();
     let queries = match generate_query_string(&db, all_mails, &opt.name) {
         Ok(queries) => queries,
         Err(e) => {
